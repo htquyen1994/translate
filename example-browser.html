@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>I18n Module Browser Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #output {
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>I18n Module Browser Demo</h1>
+    
+    <div class="container">
+        <h2>Language Controls</h2>
+        <button onclick="loadEnglish()">Load English</button>
+        <button onclick="loadVietnamese()">Load Vietnamese</button>
+        <button onclick="clearOutput()">Clear Output</button>
+    </div>
+
+    <div class="container">
+        <h2>Translation Tests</h2>
+        <button onclick="testBasicTranslations()">Basic Translations</button>
+        <button onclick="testVariableInterpolation()">Variable Interpolation</button>
+        <button onclick="testMissingKeys()">Missing Keys</button>
+    </div>
+
+    <div class="container">
+        <h2>Output</h2>
+        <div id="output"></div>
+    </div>
+
+    <script type="module">
+        // Giả lập module I18n cho browser (ES6)
+        class I18n {
+            constructor() {
+                this.currentLanguage = 'en';
+                this.languageCache = new Map();
+                this.isNode = typeof window === 'undefined';
+            }
+
+            async loadLanguage(langCode) {
+                if (this.languageCache.has(langCode)) {
+                    return;
+                }
+
+                try {
+                    const response = await fetch(`./locales/${langCode}.json`);
+                    if (!response.ok) {
+                        throw new Error(`Failed to load language file: ${langCode}`);
+                    }
+                    const data = await response.json();
+                    this.languageCache.set(langCode, data);
+                } catch (error) {
+                    console.error(`Error loading language ${langCode}:`, error);
+                    throw error;
+                }
+            }
+
+            setLanguage(langCode) {
+                this.currentLanguage = langCode;
+            }
+
+            t(key, variables) {
+                const languageData = this.languageCache.get(this.currentLanguage);
+                
+                if (!languageData) {
+                    console.warn(`Language ${this.currentLanguage} not loaded. Use loadLanguage() first.`);
+                    return key;
+                }
+
+                let translation = languageData[key];
+                
+                if (!translation) {
+                    console.warn(`Translation key "${key}" not found for language "${this.currentLanguage}"`);
+                    return key;
+                }
+
+                if (variables) {
+                    translation = this.interpolateVariables(translation, variables);
+                }
+
+                return translation;
+            }
+
+            interpolateVariables(template, variables) {
+                return template.replace(/\$\{(\w+)\}/g, (match, variableName) => {
+                    const value = variables[variableName];
+                    return value !== undefined ? String(value) : match;
+                });
+            }
+
+            getCurrentLanguage() {
+                return this.currentLanguage;
+            }
+
+            getLoadedLanguages() {
+                return Array.from(this.languageCache.keys());
+            }
+
+            clearCache() {
+                this.languageCache.clear();
+            }
+        }
+
+        // Khởi tạo i18n instance
+        const i18n = new I18n();
+        window.i18n = i18n; // Để có thể truy cập từ các function onclick
+
+        // Helper function để log output
+        function logOutput(message) {
+            const output = document.getElementById('output');
+            output.textContent += message + '\n';
+        }
+
+        // Expose functions globally
+        window.loadEnglish = async function() {
+            try {
+                logOutput('Loading English language...');
+                await i18n.loadLanguage('en');
+                i18n.setLanguage('en');
+                logOutput(`Current language: ${i18n.getCurrentLanguage()}`);
+                logOutput('English loaded successfully!');
+            } catch (error) {
+                logOutput(`Error: ${error.message}`);
+            }
+        };
+
+        window.loadVietnamese = async function() {
+            try {
+                logOutput('Loading Vietnamese language...');
+                await i18n.loadLanguage('vi');
+                i18n.setLanguage('vi');
+                logOutput(`Current language: ${i18n.getCurrentLanguage()}`);
+                logOutput('Vietnamese loaded successfully!');
+            } catch (error) {
+                logOutput(`Error: ${error.message}`);
+            }
+        };
+
+        window.testBasicTranslations = function() {
+            logOutput('\n=== Basic Translations ===');
+            logOutput(`Welcome: ${i18n.t('welcome')}`);
+            logOutput(`Login: ${i18n.t('login')}`);
+            logOutput(`Settings: ${i18n.t('settings')}`);
+            logOutput(`Loading: ${i18n.t('loading')}`);
+        };
+
+        window.testVariableInterpolation = function() {
+            logOutput('\n=== Variable Interpolation ===');
+            logOutput(`Greeting: ${i18n.t('greeting', { name: 'Alice' })}`);
+            logOutput(`User count: ${i18n.t('user_count', { count: 99 })}`);
+            logOutput(`Error message: ${i18n.t('error_message', { error: 'Connection failed' })}`);
+            logOutput(`Confirm delete: ${i18n.t('confirm_delete', { item: 'this file' })}`);
+        };
+
+        window.testMissingKeys = function() {
+            logOutput('\n=== Missing Keys Test ===');
+            logOutput(`Missing key: ${i18n.t('missing_key')}`);
+            logOutput(`Another missing: ${i18n.t('another.missing.key')}`);
+        };
+
+        window.clearOutput = function() {
+            document.getElementById('output').textContent = '';
+        };
+
+        // Auto-load English on page load
+        window.addEventListener('load', async () => {
+            await loadEnglish();
+        });
+    </script>
+</body>
+</html>

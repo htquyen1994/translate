@@ -1,0 +1,42 @@
+{
+  "app": {
+    "title": "My Angular App",
+    "welcome": "Welcome to our application!",
+    "loading": "Loading..."
+  },
+  "auth": {
+    "login": "Login",
+    "logout": "Logout",
+    "username": "Username",
+    "password": "Password",
+    "welcome_user": "Welcome back, ${name}!"
+  },
+  "navigation": {
+    "home": "Home",
+    "about": "About",
+    "contact": "Contact",
+    "settings": "Settings"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "confirm": "Confirm",
+    "error": "Error",
+    "success": "Success"
+  },
+  "messages": {
+    "success_saved": "Data saved successfully!",
+    "error_occurred": "An error occurred: ${error}",
+    "confirm_delete": "Are you sure you want to delete ${item}?",
+    "items_count": "You have ${count} items",
+    "indexed_message": "Hello {{0}}, you have {{1}} new messages",
+    "mixed_format": "Welcome ${name}! You are user {{0}} in our system",
+    "template_message": "{{0}} sent you {{1}} on {{2}}",
+    "conditional_message": "Hello ${name}${age ? ', you are ' + age + ' years old' : ''}!",
+    "calculation": "Total price: $${(price * quantity).toFixed(2)}",
+    "uppercase_name": "Welcome ${name?.toUpperCase() || 'Guest'}!",
+    "formatted_date": "Today is ${new Date().toLocaleDateString()}"
+  }
+}

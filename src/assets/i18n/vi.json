@@ -1,0 +1,42 @@
+{
+  "app": {
+    "title": "Ứng dụng Angular",
+    "welcome": "Chào mừng đến với ứng dụng của chúng tôi!",
+    "loading": "Đang tải..."
+  },
+  "auth": {
+    "login": "Đăng nhập",
+    "logout": "Đăng xuất",
+    "username": "Tên đăng nhập",
+    "password": "Mật khẩu",
+    "welcome_user": "Chào mừng trở lại, ${name}!"
+  },
+  "navigation": {
+    "home": "Trang chủ",
+    "about": "Giới thiệu",
+    "contact": "Liên hệ",
+    "settings": "Cài đặt"
+  },
+  "common": {
+    "save": "Lưu",
+    "cancel": "Hủy",
+    "delete": "Xóa",
+    "edit": "Chỉnh sửa",
+    "confirm": "Xác nhận",
+    "error": "Lỗi",
+    "success": "Thành công"
+  },
+  "messages": {
+    "success_saved": "Dữ liệu đã được lưu thành công!",
+    "error_occurred": "Đã xảy ra lỗi: ${error}",
+    "confirm_delete": "Bạn có chắc chắn muốn xóa ${item} không?",
+    "items_count": "Bạn có ${count} mục",
+    "indexed_message": "Xin chào {{0}}, bạn có {{1}} tin nhắn mới",
+    "mixed_format": "Chào mừng ${name}! Bạn là người dùng {{0}} trong hệ thống",
+    "template_message": "{{0}} đã gửi cho bạn {{1}} vào {{2}}",
+    "conditional_message": "Xin chào ${name}${age ? ', bạn ' + age + ' tuổi' : ''}!",
+    "calculation": "Tổng tiền: ${(price * quantity).toLocaleString('vi-VN')}₫",
+    "uppercase_name": "Chào mừng ${name?.toUpperCase() || 'Khách'}!",
+    "formatted_date": "Hôm nay là ${new Date().toLocaleDateString('vi-VN')}"
+  }
+}

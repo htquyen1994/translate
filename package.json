@@ -1,0 +1,43 @@
+{
+  "name": "angular-i18n-module",
+  "version": "1.0.0",
+  "description": "Simple Angular i18n module inspired by ngx-translate",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "ng build",
+    "serve": "ng serve",
+    "test": "ng test",
+    "lint": "ng lint",
+    "build-lib": "tsc -p tsconfig.lib.json"
+  },
+  "keywords": [
+    "angular",
+    "i18n",
+    "internationalization",
+    "translation",
+    "locale"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "peerDependencies": {
+    "@angular/common": ">=15.0.0",
+    "@angular/core": ">=15.0.0",
+    "rxjs": ">=7.0.0"
+  },
+  "devDependencies": {
+    "@angular/animations": "^17.0.0",
+    "@angular/common": "^17.0.0",
+    "@angular/compiler": "^17.0.0",
+    "@angular/core": "^17.0.0",
+    "@angular/forms": "^17.0.0",
+    "@angular/platform-browser": "^17.0.0",
+    "@angular/platform-browser-dynamic": "^17.0.0",
+    "@angular/router": "^17.0.0",
+    "@angular/cli": "^17.0.0",
+    "@angular/compiler-cli": "^17.0.0",
+    "typescript": "~5.2.0",
+    "rxjs": "~7.8.0",
+    "zone.js": "~0.14.0"
+  }
+}
