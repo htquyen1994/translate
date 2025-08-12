@@ -1,158 +1,219 @@
-import { catchError, finalize, isObservable, map, Observable, of, shareReplay, Subject, take } from "rxjs";
-import { EventTranslateLoad, I18nConfig, InterpolatedValueParameter, InterpolatedValueResult, Language, TranslationData } from "./translate.type";
-import { Inject, Injectable, Optional, signal } from "@angular/core";
+import { catchError, finalize, isObservable, Observable, of, shareReplay, Subject, take, takeUntil } from "rxjs";
+import { EventTranslateLoad, InterpolatedValueResult, Language, TranslationData, TranslationError, UnsupportedLanguageError } from "./translate.type";
+import { Inject, Injectable, OnDestroy, Optional } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
+import { I18nConfig, DEFAULT_I18N_CONFIG } from "./i18n.config";
 
-export abstract class I18nTranslate {
-  abstract languageSupports: Language[];
-  abstract currentLang: Language;
-  abstract config: I18nConfig;
-  abstract isLoadingResource: boolean;
+export abstract class I18nTranslate implements OnDestroy {
+  abstract readonly languageSupports: Language[];
+  abstract readonly currentLang: Language;
+  abstract readonly config: I18nConfig;
+  abstract readonly isLoadingResource: boolean;
+  abstract readonly onLangChange$: Observable<EventTranslateLoad>;
   
-  abstract setLanguage(lang: Language): void;
+  abstract setLanguage(lang: Language): Promise<void>;
   abstract setLanguageSupport(langs: Language[]): void;
   abstract getLanguageSupport(): Language[];
   abstract getCurrentLang(): Language;
   abstract get(key: string, ...values: any[]): string;
+  abstract hasTranslation(key: string, lang?: Language): boolean;
+  abstract ngOnDestroy(): void;
 }
 
-@Injectable({
-  providedIn: 'root'
-})
-export class I18nTranslateImplement extends I18nTranslate {
-  languageSupports: Language[] = ['vn'];
-  currentLang!: Language;
+@Injectable()
+export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
+  private _languageSupports: Language[] = ['vn'];
+  private _currentLang!: Language;
   private _translationRequests: Record<Language, Observable<TranslationData>> = {};
-  private _onLangChange: Subject<EventTranslateLoad> = new Subject<EventTranslateLoad>();
-  _storeLanguage = new Map<Language, TranslationData>();
-  config!: I18nConfig;
-  isLoadingResource = false;
+  private _onLangChange = new Subject<EventTranslateLoad>();
+  private _destroy$ = new Subject<void>();
+  private _storeLanguage = new Map<Language, TranslationData>();
+  private _config!: I18nConfig;
+  private _isLoadingResource = false;
+
+  get languageSupports(): Language[] {
+    return [...this._languageSupports];
+  }
+
+  get currentLang(): Language {
+    return this._currentLang;
+  }
+
+  get config(): I18nConfig {
+    return this._config;
+  }
+
+  get isLoadingResource(): boolean {
+    return this._isLoadingResource;
+  }
+
+  get onLangChange$(): Observable<EventTranslateLoad> {
+    return this._onLangChange.asObservable();
+  }
 
   constructor(
     private httpClient: HttpClient,
-    @Optional() @Inject('I18N_CONFIG') public i18nConfig: I18nConfig
+    @Optional() @Inject('I18N_CONFIG') i18nConfig?: I18nConfig
   ) {
     super();
-    if (!i18nConfig) i18nConfig = DEFAULT_I18N_CONFIG;
-    this.config = i18nConfig;
+    this._config = { ...DEFAULT_I18N_CONFIG, ...i18nConfig };
     
-    const defaultLanguage = this.config.defaultLanguage || 'en';
-    if (!this.config.languageSupports.includes(defaultLanguage)) {
-      throw Error("This language is not supported");
+    const defaultLanguage = this._config.defaultLanguage!;
+    const supportedLanguages = this._config.languageSupports || [defaultLanguage];
+    
+    if (!supportedLanguages.includes(defaultLanguage)) {
+      throw new UnsupportedLanguageError(defaultLanguage, supportedLanguages);
     }
     
-    this.setLanguageSupport(this.config.languageSupports || [[]]);
-    this.setLanguage(defaultLanguage);
+    this.setLanguageSupport(supportedLanguages);
+    this.setLanguage(defaultLanguage).catch(error => {
+      console.error('Failed to initialize default language:', error);
+    });
   }
 
-  public setLanguage(lang: Language) {
-    if (!this.languageSupports.includes(lang)) {
-      throw Error("This language is not supported");
+  public async setLanguage(lang: Language): Promise<void> {
+    if (!this._languageSupports.includes(lang)) {
+      throw new UnsupportedLanguageError(lang, this._languageSupports);
     }
     
-    this.currentLang = lang;
-    const requestGetResourcesLoaded = this._loadTranslateRequestCache(lang);
+    this._currentLang = lang;
+    const requestObservable = this._loadTranslateRequestCache(lang);
     
-    if (isObservable(requestGetResourcesLoaded)) {
-      requestGetResourcesLoaded.pipe(
-        catchError(error => {
-          console.error(`Failed to load translate ${lang}:`, error);
-          return of({});
-        })
-      ).subscribe((data: TranslationData) => {
-        this._storeLanguage.set(lang, data);
-        this.changeLang(lang);
+    if (isObservable(requestObservable)) {
+      return new Promise((resolve, reject) => {
+        requestObservable.pipe(
+          takeUntil(this._destroy$),
+          catchError(error => {
+            console.error(`Failed to load translations for ${lang}:`, error);
+            return of({});
+          })
+        ).subscribe({
+          next: (data: TranslationData) => {
+            this._storeLanguage.set(lang, data);
+            this._changeLang(lang);
+            resolve();
+          },
+          error: reject
+        });
       });
     }
-  }
-
-  setLanguageSupport(langs: Language[]) {
-    this.languageSupports = langs;
-  }
-
-  getLanguageSupport(): Language[] {
-    return this.languageSupports;
-  }
-
-  getCurrentLang() {
-    return this.currentLang;
-  }
-
-  get(key: string, ...values: any[]) {
-    const translations = this._storeLanguage.get(this.currentLang) || {};
-    let translation = this.getTranslationKeyData(translations || {}, key);
     
-    if (!translation) {
-      console.warn(`Translation key "${key}" not found for language "${this.currentLang}"`);
+    this._changeLang(lang);
+  }
+
+  public setLanguageSupport(langs: Language[]): void {
+    if (!langs?.length) {
+      throw new TranslationError('Language supports cannot be empty');
+    }
+    this._languageSupports = [...langs];
+  }
+
+  public getLanguageSupport(): Language[] {
+    return [...this._languageSupports];
+  }
+
+  public getCurrentLang(): Language {
+    return this._currentLang;
+  }
+
+  public get(key: string, ...values: any[]): string {
+    const translations = this._storeLanguage.get(this._currentLang);
+    if (!translations) {
+      console.warn(`No translations loaded for language "${this._currentLang}"`);
       return key;
     }
     
-    return values ? this.interpolate(translation, values) : translation;
+    const translation = this._getTranslationKeyData(translations, key);
+    if (!translation) {
+      const fallbackLang = this._config.fallbackLanguage;
+      if (fallbackLang && fallbackLang !== this._currentLang) {
+        const fallbackTranslations = this._storeLanguage.get(fallbackLang);
+        const fallbackTranslation = fallbackTranslations ? this._getTranslationKeyData(fallbackTranslations, key) : null;
+        if (fallbackTranslation) {
+          return values.length ? this._interpolate(fallbackTranslation, values) : fallbackTranslation;
+        }
+      }
+      console.warn(`Translation key "${key}" not found for language "${this._currentLang}"`);
+      return key;
+    }
+    
+    return values.length ? this._interpolate(translation, values) : translation;
   }
 
-  private _loadTranslateRequestCache(lang: Language) {
+  private _loadTranslateRequestCache(lang: Language): Observable<TranslationData> | undefined {
     if (!this._storeLanguage.has(lang)) {
-      this.isLoadingResource = true;
-      this._translationRequests[lang] = this._translationRequests[lang] || this.loadTranslateAssetResources(lang);
-      this._translationRequests[lang].pipe(
-        finalize(() => { this.isLoadingResource = false; })
+      this._isLoadingResource = true;
+      this._translationRequests[lang] = this._translationRequests[lang] || this._loadTranslateAssetResources(lang).pipe(
+        finalize(() => { this._isLoadingResource = false; }),
+        shareReplay(1)
       );
       return this._translationRequests[lang];
     }
     return undefined;
   }
 
-  private loadTranslateAssetResources(lang: Language) {
-    return this.httpClient.get<TranslationData>(`${this.config.assetsUrl}/${lang}.json`)
-      .pipe(shareReplay(1), take(1));
+  private _loadTranslateAssetResources(lang: Language): Observable<TranslationData> {
+    const url = `${this._config.assetsPath}/${lang}.json`;
+    return this.httpClient.get<TranslationData>(url).pipe(
+      take(1),
+      catchError(error => {
+        throw new TranslationError(`Failed to load translation file: ${url}`, lang);
+      })
+    );
   }
 
-  private changeLang(lang: Language): void {
-    const data = this._storeLanguage.has(lang) ? this._storeLanguage.get(lang) : {};
-    this._onLangChange.next({
-      lang: lang,
-      data: data ?? {}
-    });
+  private _changeLang(lang: Language): void {
+    const data = this._storeLanguage.get(lang) ?? {};
+    this._onLangChange.next({ lang, data });
   }
 
-  private getTranslationKeyData(data: TranslationData, key: string): string | null {
-    if (key in data) return data[key];
-    return null;
+  private _getTranslationKeyData(data: TranslationData, key: string): string | null {
+    return data[key] ?? null;
   }
 
-  private interpolate(text: string, ...valueParams: any[]): string {
-    const templateTag = (strings: TemplateStringsArray, ...values: any[]): string => {
-      let result = strings[0];
-      for (let i = 0; i < values.length; i++) {
-        result += String(values[i] ?? `{{${i}}}`) + (strings[i + 1] || '');
-      }
-      return result;
-    };
-
-    const { strings, values } = this.parseInterpolatedTemplate(text, valueParams);
-    return templateTag(strings, ...values);
+  private _interpolate(text: string, valueParams: any[]): string {
+    if (!valueParams.length) return text;
+    
+    const { strings, values } = this._parseInterpolatedTemplate(text, valueParams);
+    return this._templateTag(strings, ...values);
   }
 
-  private parseInterpolatedTemplate(textTranslate: string, params?: any[]): InterpolatedValueResult {
-    if (!params) {
-      return {
-        strings: Object.assign([textTranslate], { raw: [textTranslate] }) as TemplateStringsArray,
-        values: []
-      };
+  private _templateTag(strings: TemplateStringsArray, ...values: any[]): string {
+    let result = strings[0] || '';
+    for (let i = 0; i < values.length; i++) {
+      const value = values[i];
+      result += (value !== null && value !== undefined ? String(value) : `{{${i}}}`) + (strings[i + 1] || '');
     }
+    return result;
+  }
 
+  private _parseInterpolatedTemplate(textTranslate: string, params: any[]): InterpolatedValueResult {
     const segments: string[] = [];
     const values: any[] = [];
     let lastIndex = 0;
 
-    textTranslate.replace(/\{\{(\d+)\}\}/g, (match, param, offset) => {
+    textTranslate.replace(/\{\{(\d+)\}\}/g, (match, paramIndex, offset) => {
       segments.push(textTranslate.slice(lastIndex, offset));
-      values.push(params[param]);
+      const index = parseInt(paramIndex, 10);
+      values.push(params[index]);
       lastIndex = offset + match.length;
       return match;
     });
 
+    segments.push(textTranslate.slice(lastIndex));
     const strings = Object.assign(segments, { raw: segments }) as TemplateStringsArray;
     return { strings, values };
+  }
+
+  public hasTranslation(key: string, lang?: Language): boolean {
+    const targetLang = lang || this._currentLang;
+    const translations = this._storeLanguage.get(targetLang);
+    return translations ? this._getTranslationKeyData(translations, key) !== null : false;
+  }
+
+  public ngOnDestroy(): void {
+    this._destroy$.next();
+    this._destroy$.complete();
+    this._onLangChange.complete();
   }
 }
