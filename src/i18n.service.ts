@@ -1,6 +1,6 @@
-import { catchError, finalize, isObservable, Observable, of, shareReplay, Subject, take, takeUntil } from "rxjs";
+import { catchError, finalize, isObservable, map, Observable, of, shareReplay, startWith, Subject, take, takeUntil } from "rxjs";
 import { EventTranslateLoad, InterpolatedValueResult, Language, TranslationData, TranslationError, UnsupportedLanguageError } from "./translate.type";
-import { Inject, Injectable, OnDestroy, Optional } from "@angular/core";
+import { computed, Inject, Injectable, OnDestroy, Optional, signal, Signal } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
 import { I18nConfig, DEFAULT_I18N_CONFIG } from "./i18n.config";
 
@@ -16,6 +16,8 @@ export abstract class I18nTranslate implements OnDestroy {
   abstract getLanguageSupport(): Language[];
   abstract getCurrentLang(): Language;
   abstract get(key: string, ...values: any[]): string;
+  abstract get$(key: string, ...values: any[]): Observable<string>;
+  abstract getSignal(key: string, ...values: any[]): Signal<string>;
   abstract hasTranslation(key: string, lang?: Language): boolean;
   abstract ngOnDestroy(): void;
 }
@@ -30,6 +32,10 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
   private _storeLanguage = new Map<Language, TranslationData>();
   private _config!: I18nConfig;
   private _isLoadingResource = false;
+  
+  // Signal for reactive translations
+  private _currentLangSignal = signal<Language>('en');
+  private _translationsSignal = signal<Map<Language, TranslationData>>(new Map());
 
   get languageSupports(): Language[] {
     return [...this._languageSupports];
@@ -66,6 +72,7 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
     }
     
     this.setLanguageSupport(supportedLanguages);
+    this._currentLangSignal.set(defaultLanguage);
     this.setLanguage(defaultLanguage).catch(error => {
       console.error('Failed to initialize default language:', error);
     });
@@ -77,6 +84,7 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
     }
     
     this._currentLang = lang;
+    this._currentLangSignal.set(lang);
     const requestObservable = this._loadTranslateRequestCache(lang);
     
     if (isObservable(requestObservable)) {
@@ -90,6 +98,7 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
         ).subscribe({
           next: (data: TranslationData) => {
             this._storeLanguage.set(lang, data);
+            this._translationsSignal.set(new Map(this._storeLanguage));
             this._changeLang(lang);
             resolve();
           },
@@ -117,23 +126,48 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
   }
 
   public get(key: string, ...values: any[]): string {
-    const translations = this._storeLanguage.get(this._currentLang);
+    return this._getTranslationText(key, this._currentLang, this._storeLanguage, values);
+  }
+
+  public get$(key: string, ...values: any[]): Observable<string> {
+    return this._onLangChange.pipe(
+      map(() => this.get(key, ...values)),
+      startWith(this.get(key, ...values)),
+      takeUntil(this._destroy$)
+    );
+  }
+
+  public getSignal(key: string, ...values: any[]): Signal<string> {
+    return computed(() => {
+      const currentLang = this._currentLangSignal();
+      const translationsMap = this._translationsSignal();
+      return this._getTranslationText(key, currentLang, translationsMap, values);
+    });
+  }
+
+  private _getTranslationText(
+    key: string, 
+    currentLang: Language, 
+    translationsStore: Map<Language, TranslationData>,
+    values: any[]
+  ): string {
+    const translations = translationsStore.get(currentLang);
     if (!translations) {
-      console.warn(`No translations loaded for language "${this._currentLang}"`);
+      console.warn(`No translations loaded for language "${currentLang}"`);
       return key;
     }
     
     const translation = this._getTranslationKeyData(translations, key);
     if (!translation) {
       const fallbackLang = this._config.fallbackLanguage;
-      if (fallbackLang && fallbackLang !== this._currentLang) {
-        const fallbackTranslations = this._storeLanguage.get(fallbackLang);
+      if (fallbackLang && fallbackLang !== currentLang) {
+        const fallbackTranslations = translationsStore.get(fallbackLang);
         const fallbackTranslation = fallbackTranslations ? this._getTranslationKeyData(fallbackTranslations, key) : null;
         if (fallbackTranslation) {
           return values.length ? this._interpolate(fallbackTranslation, values) : fallbackTranslation;
         }
       }
-      console.warn(`Translation key "${key}" not found for language "${this._currentLang}"`);
+      console.warn(`Translation key "${key}" not found for language "${currentLang}"`);
       return key;
     }
     
@@ -152,6 +186,11 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
     return undefined;
   }
 
+  private _changeLang(lang: Language): void {
+    const data = this._storeLanguage.get(lang) ?? {};
+    this._onLangChange.next({ lang, data });
+  }
+
   private _loadTranslateAssetResources(lang: Language): Observable<TranslationData> {
     const url = `${this._config.assetsPath}/${lang}.json`;
     return this.httpClient.get<TranslationData>(url).pipe(
@@ -162,10 +201,6 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
     );
   }
 
-  private _changeLang(lang: Language): void {
-    const data = this._storeLanguage.get(lang) ?? {};
-    this._onLangChange.next({ lang, data });
-  }
 
   private _getTranslationKeyData(data: TranslationData, key: string): string | null {
     return data[key] ?? null;
