@@ -1,6 +1,6 @@
-import { catchError, finalize, isObservable, map, Observable, of, shareReplay, startWith, Subject, take, takeUntil } from "rxjs";
+import { catchError, finalize, from, isObservable, map, Observable, of, shareReplay, startWith, Subject, switchMap, take, takeUntil } from "rxjs";
 import { EventTranslateLoad, InterpolatedValueResult, Language, TranslationData, TranslationError, UnsupportedLanguageError } from "./translate.type";
-import { computed, Inject, Injectable, OnDestroy, Optional, signal, Signal } from "@angular/core";
+import { Inject, Injectable, OnDestroy, Optional, Signal, toSignal } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
 import { I18nConfig, DEFAULT_I18N_CONFIG } from "./i18n.config";
 
@@ -33,9 +33,8 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
   private _config!: I18nConfig;
   private _isLoadingResource = false;
   
-  // Signal for reactive translations
-  private _currentLangSignal = signal<Language>('en');
-  private _translationsSignal = signal<Map<Language, TranslationData>>(new Map());
+  // Global loading promise
+  private _currentLoadingPromise: Promise<void> | null = null;
 
   get languageSupports(): Language[] {
     return [...this._languageSupports];
@@ -72,7 +71,6 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
     }
     
     this.setLanguageSupport(supportedLanguages);
-    this._currentLangSignal.set(defaultLanguage);
     this.setLanguage(defaultLanguage).catch(error => {
       console.error('Failed to initialize default language:', error);
     });
@@ -84,11 +82,10 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
     }
     
     this._currentLang = lang;
-    this._currentLangSignal.set(lang);
     const requestObservable = this._loadTranslateRequestCache(lang);
     
     if (isObservable(requestObservable)) {
-      return new Promise((resolve, reject) => {
+      const loadingPromise = new Promise<void>((resolve, reject) => {
         requestObservable.pipe(
           takeUntil(this._destroy$),
           catchError(error => {
@@ -98,13 +95,23 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
         ).subscribe({
           next: (data: TranslationData) => {
             this._storeLanguage.set(lang, data);
-            this._translationsSignal.set(new Map(this._storeLanguage));
             this._changeLang(lang);
             resolve();
           },
-          error: reject
+          error: (err) => {
+            reject(err);
+          }
         });
       });
+      
+      this._currentLoadingPromise = loadingPromise; // Store globally
+      
+      // Clear promise after completion (both success and error)
+      loadingPromise.finally(() => {
+        this._currentLoadingPromise = null;
+      });
+      
+      return loadingPromise;
     }
     
     this._changeLang(lang);
@@ -130,19 +137,33 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
   }
 
   public get$(key: string, ...values: any[]): Observable<string> {
+    // Check if currently loading
+    if (this._isLoadingResource && this._currentLoadingPromise) {
+      // Wait for loading completion, then provide translations
+      return from(this._currentLoadingPromise).pipe(
+        switchMap(() => this._onLangChange.pipe(
+          map(() => this._getTranslationText(key, this._currentLang, this._storeLanguage, values)),
+          startWith(this._getTranslationText(key, this._currentLang, this._storeLanguage, values))
+        )),
+        takeUntil(this._destroy$)
+      );
+    }
+    
+    // Normal flow when not loading
     return this._onLangChange.pipe(
-      map(() => this.get(key, ...values)),
-      startWith(this.get(key, ...values)),
+      map(() => this._getTranslationText(key, this._currentLang, this._storeLanguage, values)),
+      startWith(this._getTranslationText(key, this._currentLang, this._storeLanguage, values)),
       takeUntil(this._destroy$)
     );
   }
 
   public getSignal(key: string, ...values: any[]): Signal<string> {
-    return computed(() => {
-      const currentLang = this._currentLangSignal();
-      const translationsMap = this._translationsSignal();
-      return this._getTranslationText(key, currentLang, translationsMap, values);
+    // Convert get$() Observable to Signal using toSignal()
+    const translationSignal = toSignal(this.get$(key, ...values), {
+      initialValue: key // Fallback to key while loading
     });
+    
+    return translationSignal;
   }
 
   private _getTranslationText(
@@ -152,26 +173,51 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
     values: any[]
   ): string {
     const translations = translationsStore.get(currentLang);
-    if (!translations) {
-      console.warn(`No translations loaded for language "${currentLang}"`);
-      return key;
-    }
     
-    const translation = this._getTranslationKeyData(translations, key);
-    if (!translation) {
-      const fallbackLang = this._config.fallbackLanguage;
-      if (fallbackLang && fallbackLang !== currentLang) {
-        const fallbackTranslations = translationsStore.get(fallbackLang);
-        const fallbackTranslation = fallbackTranslations ? this._getTranslationKeyData(fallbackTranslations, key) : null;
-        if (fallbackTranslation) {
-          return values.length ? this._interpolate(fallbackTranslation, values) : fallbackTranslation;
-        }
+    // Try current language first
+    if (translations) {
+      const translation = this._getTranslationKeyData(translations, key);
+      if (translation) {
+        return values.length ? this._interpolate(translation, values) : translation;
       }
-      console.warn(`Translation key "${key}" not found for language "${currentLang}"`);
-      return key;
     }
     
-    return values.length ? this._interpolate(translation, values) : translation;
+    // Try fallback language if current language failed or not loaded
+    const fallbackResult = this._tryFallbackTranslation(key, currentLang, translationsStore, values);
+    if (fallbackResult) {
+      return fallbackResult;
+    }
+    
+    // Return key if no translation found
+    return key;
+  }
+
+  private _tryFallbackTranslation(
+    key: string,
+    currentLang: Language,
+    translationsStore: Map<Language, TranslationData>,
+    values: any[]
+  ): string | null {
+    const fallbackLang = this._config.fallbackLanguage;
+    
+    // No fallback language configured or same as current
+    if (!fallbackLang || fallbackLang === currentLang) {
+      return null;
+    }
+    
+    // Check if fallback translations are loaded
+    const fallbackTranslations = translationsStore.get(fallbackLang);
+    if (!fallbackTranslations) {
+      return null;
+    }
+    
+    // Try to get translation from fallback language
+    const fallbackTranslation = this._getTranslationKeyData(fallbackTranslations, key);
+    if (!fallbackTranslation) {
+      return null;
+    }
+    
+    return values.length ? this._interpolate(fallbackTranslation, values) : fallbackTranslation;
   }
 
   private _loadTranslateRequestCache(lang: Language): Observable<TranslationData> | undefined {
@@ -250,5 +296,6 @@ export class I18nTranslateImplement extends I18nTranslate implements OnDestroy {
     this._destroy$.next();
     this._destroy$.complete();
     this._onLangChange.complete();
+    this._currentLoadingPromise = null; // Clear loading promise
   }
 }
